@@ -126,7 +126,9 @@ func firefoxProfileNames(profiles []firefoxProfile) []string {
 // resolveFirefoxProfileArgs maps a configured profile to Firefox command line
 // arguments. An exact profiles.ini name wins, so existing configurations keep
 // launching what they always did; then an exact group profile name; then the
-// profile directory, as a full path or its base name.
+// profile directory, as a full path or its base name. An absolute path that
+// matched nothing is used as given, which is what makes a configuration work
+// when the profile list cannot be read at all.
 func resolveFirefoxProfileArgs(configDir string, profile string) ([]string, bool) {
 	profiles, sources := readFirefoxProfiles(configDir)
 
@@ -165,12 +167,47 @@ func resolveFirefoxProfileArgs(configDir string, profile string) ([]string, bool
 		}
 	}
 
+	// Nothing in the profile list matched. An absolute path is still usable
+	// on its own: it names the directory Firefox would open anyway, and
+	// passing it through needs no access to the Firefox application support
+	// directory. That is the one thing that still works when the operating
+	// system denies that access, so it is the escape hatch from a denial
+	// that Finicky cannot ask its way out of.
+	if filepath.IsAbs(profile) {
+		if args, ok := firefoxProfilePathArgs(profile); ok {
+			return args, true
+		}
+	}
+
 	attrs := []any{"Expected profile", profile, "Available profiles", strings.Join(firefoxProfileNames(profiles), ", ")}
 	if note, ok := sources.note(); ok {
 		attrs = append(attrs, "note", note)
 	}
 	slog.Warn("Could not find profile in Firefox profiles.", attrs...)
 	return nil, false
+}
+
+// firefoxProfilePathArgs accepts an absolute profile directory that is not in
+// any profile list. It refuses a path that is known not to exist, because
+// Firefox creates an empty profile for one of those rather than reporting an
+// error, but it accepts a path it was not allowed to check: under an access
+// denial the directory almost certainly exists and Firefox, which is not
+// denied, can open it.
+func firefoxProfilePathArgs(profile string) ([]string, bool) {
+	info, err := os.Stat(profile)
+	switch {
+	case err == nil && !info.IsDir():
+		slog.Warn("Firefox profile path is not a directory", "path", profile)
+		return nil, false
+	case errors.Is(err, fs.ErrNotExist):
+		slog.Warn("Firefox profile path does not exist", "path", profile, "note", "Firefox would create an empty profile there, so it is not used")
+		return nil, false
+	case err != nil:
+		slog.Warn("Using Firefox profile path that could not be checked", "path", profile, "error", err, "suggestion", firefoxAccessHint)
+	default:
+		slog.Info("Using Firefox profile path directly", "path", profile)
+	}
+	return []string{"--profile", profile}, true
 }
 
 // readFirefoxIniProfiles parses the [ProfileN] sections of profiles.ini.

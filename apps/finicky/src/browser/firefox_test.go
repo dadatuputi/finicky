@@ -185,13 +185,57 @@ func TestReadFirefoxProfiles_AccessDenied(t *testing.T) {
 func TestResolveFirefoxProfileArgs_AccessDenied(t *testing.T) {
 	configDir := t.TempDir()
 	writeFile(t, filepath.Join(configDir, firefoxProfilesIni), sampleProfilesIni)
+	profileDir := mkProfileDir(t, configDir, "Profiles/x1y2z3w4.default-release")
 	denyDir(t, configDir)
 
-	// The profile cannot be resolved, so the caller launches Firefox without
-	// a profile flag. The log line, not the return value, is what tells the
-	// user why.
+	// A name cannot be resolved without reading the directory, so the caller
+	// launches Firefox without a profile flag. The log line, not the return
+	// value, is what tells the user why.
 	if got, ok := resolveFirefoxProfileArgs(configDir, "default-release"); ok {
-		t.Errorf("expected no match when the directory is unreadable, got %v", got)
+		t.Errorf("expected no match for a name when the directory is unreadable, got %v", got)
+	}
+
+	// An absolute path still works, because using it needs no access to the
+	// directory. This is the only configuration that survives a denial, and
+	// the reason it is worth supporting.
+	got, ok := resolveFirefoxProfileArgs(configDir, profileDir)
+	if !ok || !reflect.DeepEqual(got, []string{"--profile", profileDir}) {
+		t.Errorf("absolute path under a denial: got (%v, %v), want --profile %s", got, ok, profileDir)
+	}
+}
+
+func TestResolveFirefoxProfileArgs_AbsolutePathWithoutProfilesIni(t *testing.T) {
+	configDir := t.TempDir()
+	// No profiles.ini and no store at all: discovery has nothing to offer.
+	profileDir := mkProfileDir(t, configDir, "Profiles/abcd1234.Work")
+
+	got, ok := resolveFirefoxProfileArgs(configDir, profileDir)
+	if !ok || !reflect.DeepEqual(got, []string{"--profile", profileDir}) {
+		t.Errorf("undiscoverable absolute path: got (%v, %v), want --profile %s", got, ok, profileDir)
+	}
+}
+
+// Firefox creates an empty profile when handed a directory that is not there,
+// which loses the user's session silently. A path that is known to be absent
+// must not be passed through.
+func TestResolveFirefoxProfileArgs_AbsolutePathRejected(t *testing.T) {
+	configDir := t.TempDir()
+
+	missing := filepath.Join(configDir, "Profiles", "typo.Work")
+	if got, ok := resolveFirefoxProfileArgs(configDir, missing); ok {
+		t.Errorf("expected a missing path to be refused, got %v", got)
+	}
+
+	notADir := filepath.Join(configDir, "Profiles", "a-file")
+	writeFile(t, notADir, "")
+	if got, ok := resolveFirefoxProfileArgs(configDir, notADir); ok {
+		t.Errorf("expected a non-directory path to be refused, got %v", got)
+	}
+
+	// A relative name that matches nothing stays unresolved: only an absolute
+	// path is taken on faith.
+	if got, ok := resolveFirefoxProfileArgs(configDir, "Profiles/typo.Work"); ok {
+		t.Errorf("expected a relative path to be refused, got %v", got)
 	}
 }
 

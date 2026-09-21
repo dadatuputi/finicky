@@ -87,7 +87,12 @@ A handler can open a URL in a specific browser profile, either as `browser: { na
 
 Use the object form for profile names that contain a colon, since the shorthand splits on `:`. The Finicky window lists the profiles it detected for each browser.
 
-Reading profiles means reading the browser's own data directory under `~/Library/Application Support`. Recent macOS versions protect those directories, so if the Finicky window shows no profiles for a browser, or a handler opens the wrong profile, grant Finicky **Full Disk Access** in System Settings > Privacy & Security > Full Disk Access and restart it. Without it Finicky cannot tell a profile that does not exist from one it is not allowed to see, and it falls back to launching the browser without a profile, which lands the URL in whichever profile was last used. The log says which of the two happened.
+Resolving a profile *name* means reading the browser's own data directory under `~/Library/Application Support`. Recent macOS versions protect those directories from other apps, so Finicky can be refused access to them. When that happens the profile list comes back empty, no name matches, and the browser is launched with no profile at all, which lands the URL in whichever profile was last used. The log says so, and names the remedy.
+
+There are two ways out, and macOS will not prompt you for either one:
+
+- **Give Finicky the access.** Add Finicky under System Settings > Privacy & Security > **Full Disk Access**, then restart it. There is no API for an app to request this, so nothing can ask you on Finicky's behalf; it has to be added by hand. A locally built Finicky is re-signed on every build, and the grant is tied to the signature, so a rebuilt app may need removing and re-adding.
+- **Skip the lookup.** Give Firefox's profile *directory* instead of its name, as an absolute path: `browser: { name: "Firefox", profile: "/Users/you/Library/Application Support/Firefox/Profiles/abcd1234.Work" }`. A path is passed to Firefox as-is, so it needs no access to anything and works whether or not the permission was ever granted. Copy it from "Profile Folder" in `about:support`, inside the profile you want. A path that does not exist is refused rather than passed on, since Firefox would silently create an empty profile there.
 
 ## Migrating from Finicky 3
 
