@@ -1,7 +1,9 @@
 package browser
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -111,7 +113,10 @@ func TestReadFirefoxIniProfiles(t *testing.T) {
 	iniPath := filepath.Join(configDir, firefoxProfilesIni)
 	writeFile(t, iniPath, sampleProfilesIni)
 
-	got := readFirefoxIniProfiles(iniPath)
+	got, err := readFirefoxIniProfiles(iniPath)
+	if err != nil {
+		t.Fatalf("readFirefoxIniProfiles: %v", err)
+	}
 	want := []firefoxProfile{
 		{Name: "default-release", Dir: filepath.Join(configDir, "Profiles/x1y2z3w4.default-release"), Legacy: true, StoreID: "1a2b3c4d"},
 		{Name: "default", Dir: filepath.Join(configDir, "Profiles/q5w6e7r8.default"), Legacy: true},
@@ -126,8 +131,84 @@ func TestReadFirefoxIniProfiles(t *testing.T) {
 }
 
 func TestReadFirefoxIniProfiles_Missing(t *testing.T) {
-	if got := readFirefoxIniProfiles(filepath.Join(t.TempDir(), "profiles.ini")); len(got) != 0 {
+	got, err := readFirefoxIniProfiles(filepath.Join(t.TempDir(), "profiles.ini"))
+	if len(got) != 0 {
 		t.Errorf("expected no profiles for missing file, got %+v", got)
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("expected a not-exist error, got %v", err)
+	}
+	// A missing file must not be reported as a denial: that would send the
+	// user off to grant Full Disk Access for a profile that simply is not
+	// there.
+	if errors.Is(err, fs.ErrPermission) {
+		t.Error("a missing profiles.ini must not look like a permission denial")
+	}
+}
+
+// denyDir makes a directory unreadable for the rest of the test. Root ignores
+// the mode bits, so there is nothing to assert there.
+func denyDir(t *testing.T, dir string) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: permission bits are not enforced")
+	}
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	// Restore access so t.TempDir cleanup can remove the directory.
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+}
+
+// A denied read of the Firefox directory must be reported as a denial, not as
+// an empty profile list. Recent macOS versions protect the app support
+// directories of non-sandboxed browsers, so this is what Finicky sees until
+// the user grants it Full Disk Access.
+func TestReadFirefoxProfiles_AccessDenied(t *testing.T) {
+	configDir := t.TempDir()
+	writeFile(t, filepath.Join(configDir, firefoxProfilesIni), sampleProfilesIni)
+	denyDir(t, configDir)
+
+	profiles, sources := readFirefoxProfiles(configDir)
+	if len(profiles) != 0 {
+		t.Errorf("expected no profiles when the directory is unreadable, got %+v", profiles)
+	}
+	if !sources.AccessDenied {
+		t.Error("expected AccessDenied when the Firefox directory cannot be read")
+	}
+	note, ok := sources.note()
+	if !ok || !strings.Contains(note, "Full Disk Access") {
+		t.Errorf("expected a note naming the remedy, got %q (ok=%v)", note, ok)
+	}
+}
+
+func TestResolveFirefoxProfileArgs_AccessDenied(t *testing.T) {
+	configDir := t.TempDir()
+	writeFile(t, filepath.Join(configDir, firefoxProfilesIni), sampleProfilesIni)
+	denyDir(t, configDir)
+
+	// The profile cannot be resolved, so the caller launches Firefox without
+	// a profile flag. The log line, not the return value, is what tells the
+	// user why.
+	if got, ok := resolveFirefoxProfileArgs(configDir, "default-release"); ok {
+		t.Errorf("expected no match when the directory is unreadable, got %v", got)
+	}
+}
+
+// A store that is present but unreadable is a weaker statement than a denied
+// directory, and says so.
+func TestFirefoxProfileSourcesNote(t *testing.T) {
+	if _, ok := (firefoxProfileSources{}).note(); ok {
+		t.Error("expected no note when everything was read")
+	}
+	note, ok := (firefoxProfileSources{StoresUnreadable: true}).note()
+	if !ok || !strings.Contains(note, "about:profiles") {
+		t.Errorf("store note: got %q (ok=%v)", note, ok)
+	}
+	// A denial hides everything, so it wins over the store-only note.
+	note, ok = (firefoxProfileSources{AccessDenied: true, StoresUnreadable: true}).note()
+	if !ok || !strings.Contains(note, "Full Disk Access") {
+		t.Errorf("denied note: got %q (ok=%v)", note, ok)
 	}
 }
 
@@ -324,9 +405,9 @@ func TestResolveFirefoxProfileArgs_LegacyOnly(t *testing.T) {
 
 func TestReadFirefoxProfiles_Order(t *testing.T) {
 	configDir := fixtureConfigDir(t)
-	profiles, readable := readFirefoxProfiles(configDir)
-	if !readable {
-		t.Fatal("expected stores to be readable")
+	profiles, sources := readFirefoxProfiles(configDir)
+	if sources.AccessDenied || sources.StoresUnreadable {
+		t.Fatalf("expected every profile source to be readable, got %+v", sources)
 	}
 	got := firefoxProfileNames(profiles)
 	// Group names first; default-release is hidden behind Personal (same

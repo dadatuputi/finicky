@@ -87,6 +87,8 @@ A handler can open a URL in a specific browser profile, either as `browser: { na
 
 Use the object form for profile names that contain a colon, since the shorthand splits on `:`. The Finicky window lists the profiles it detected for each browser.
 
+Reading profiles means reading the browser's own data directory under `~/Library/Application Support`. Recent macOS versions protect those directories, so if the Finicky window shows no profiles for a browser, or a handler opens the wrong profile, grant Finicky **Full Disk Access** in System Settings > Privacy & Security > Full Disk Access and restart it. Without it Finicky cannot tell a profile that does not exist from one it is not allowed to see, and it falls back to launching the browser without a profile, which lands the URL in whichever profile was last used. The log says which of the two happened.
+
 ## Migrating from Finicky 3
 
 Please see the [wiki page](https://github.com/johnste/finicky/wiki/Migrating-from-Finicky-3) for updating info and migrating your configuration

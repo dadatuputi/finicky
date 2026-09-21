@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -40,18 +42,61 @@ const (
 	firefoxProfileGroupsDir = "Profile Groups"
 	firefoxGroupStoreQuery  = "SELECT name, path FROM Profiles ORDER BY id;"
 	sqliteReadTimeout       = 1 * time.Second
+
+	// firefoxAccessHint is the remedy for an operating system denial.
+	// Recent macOS versions extended application data protection to the app
+	// support directories of non-sandboxed browsers, so reads of the Firefox
+	// directory fail with EPERM ("operation not permitted") until the user
+	// grants Finicky Full Disk Access. Firefox itself keeps working, which
+	// makes the denial easy to mistake for a missing profile.
+	firefoxAccessHint = "Grant Finicky Full Disk Access in System Settings > Privacy & Security > Full Disk Access, then restart Finicky"
 )
+
+// firefoxProfileSources records why a profile list may be incomplete, so that
+// a profile which could not be read is not reported as one that does not
+// exist.
+type firefoxProfileSources struct {
+	// AccessDenied is true when the operating system refused access to the
+	// Firefox application support directory, which hides every profile at
+	// once.
+	AccessDenied bool
+	// StoresUnreadable is true when a profile group store was missing or
+	// could not be read.
+	StoresUnreadable bool
+}
+
+// note returns a line for the "profile not found" message, if the profile
+// list is known to be incomplete.
+func (s firefoxProfileSources) note() (string, bool) {
+	switch {
+	case s.AccessDenied:
+		return "the Firefox profile directory could not be read, so no profiles could be listed; " + firefoxAccessHint, true
+	case s.StoresUnreadable:
+		return "a profile group store could not be read, so profiles from about:profiles may be missing from this list", true
+	}
+	return "", false
+}
 
 var firefoxProfileSection = regexp.MustCompile(`^\[Profile[0-9]+\]$`)
 
 // readFirefoxProfiles returns profile-group profiles first, then profiles.ini
 // profiles. Group profiles come first because those are the names the user
-// sees in about:profiles. The bool is false when a group store could not be
-// read, so callers can say so instead of reporting a profile as missing.
-func readFirefoxProfiles(configDir string) ([]firefoxProfile, bool) {
-	legacy := readFirefoxIniProfiles(filepath.Join(configDir, firefoxProfilesIni))
+// sees in about:profiles. The returned sources say whether anything could not
+// be read, so callers can say so instead of reporting a profile as missing.
+func readFirefoxProfiles(configDir string) ([]firefoxProfile, firefoxProfileSources) {
+	legacy, err := readFirefoxIniProfiles(filepath.Join(configDir, firefoxProfilesIni))
+
+	var sources firefoxProfileSources
+	if errors.Is(err, fs.ErrPermission) {
+		// Every profile source lives under this directory, so one denial
+		// hides all of them. Warn once here rather than for each source.
+		sources.AccessDenied = true
+		slog.Warn("The operating system denied access to the Firefox profile directory, so no Firefox profiles could be read", "path", configDir, "error", err, "suggestion", firefoxAccessHint)
+	}
+
 	group, readable := readFirefoxGroupProfiles(configDir, firefoxStoreIDs(legacy))
-	return append(group, legacy...), readable
+	sources.StoresUnreadable = !readable
+	return append(group, legacy...), sources
 }
 
 // firefoxProfileNames returns the distinct profile names for display. A
@@ -83,7 +128,7 @@ func firefoxProfileNames(profiles []firefoxProfile) []string {
 // launching what they always did; then an exact group profile name; then the
 // profile directory, as a full path or its base name.
 func resolveFirefoxProfileArgs(configDir string, profile string) ([]string, bool) {
-	profiles, storesReadable := readFirefoxProfiles(configDir)
+	profiles, sources := readFirefoxProfiles(configDir)
 
 	var legacy, group *firefoxProfile
 	for i := range profiles {
@@ -121,8 +166,8 @@ func resolveFirefoxProfileArgs(configDir string, profile string) ([]string, bool
 	}
 
 	attrs := []any{"Expected profile", profile, "Available profiles", strings.Join(firefoxProfileNames(profiles), ", ")}
-	if !storesReadable {
-		attrs = append(attrs, "note", "a profile group store could not be read, so profiles from about:profiles may be missing from this list")
+	if note, ok := sources.note(); ok {
+		attrs = append(attrs, "note", note)
 	}
 	slog.Warn("Could not find profile in Firefox profiles.", attrs...)
 	return nil, false
@@ -130,11 +175,15 @@ func resolveFirefoxProfileArgs(configDir string, profile string) ([]string, bool
 
 // readFirefoxIniProfiles parses the [ProfileN] sections of profiles.ini.
 // Relative paths are resolved against the directory containing profiles.ini.
-func readFirefoxIniProfiles(profilesIniPath string) []firefoxProfile {
+// The error is returned so the caller can tell a missing file from a file the
+// operating system refused to let us read.
+func readFirefoxIniProfiles(profilesIniPath string) ([]firefoxProfile, error) {
 	data, err := os.ReadFile(profilesIniPath)
 	if err != nil {
+		// A denial is reported by the caller, which has the directory in
+		// hand and can name the remedy once for every profile source.
 		slog.Info("Error reading profiles.ini", "path", profilesIniPath, "error", err)
-		return nil
+		return nil, err
 	}
 	baseDir := filepath.Dir(profilesIniPath)
 
@@ -183,7 +232,7 @@ func readFirefoxIniProfiles(profilesIniPath string) []firefoxProfile {
 		}
 	}
 	flush()
-	return profiles
+	return profiles, nil
 }
 
 // firefoxStoreIDs returns the distinct store IDs referenced by profiles.ini
@@ -217,7 +266,11 @@ func readFirefoxGroupProfiles(configDir string, storeIDs []string) ([]firefoxPro
 	for _, id := range storeIDs {
 		storePath := filepath.Join(groupsDir, id+".sqlite")
 		if _, err := os.Stat(storePath); err != nil {
-			slog.Info("Firefox profile group store referenced by profiles.ini not found", "path", storePath)
+			if errors.Is(err, fs.ErrPermission) {
+				slog.Warn("The operating system denied access to the Firefox profile group store", "path", storePath, "error", err, "suggestion", firefoxAccessHint)
+			} else {
+				slog.Info("Firefox profile group store referenced by profiles.ini not found", "path", storePath)
+			}
 			readable = false
 			continue
 		}
@@ -287,9 +340,16 @@ func readFirefoxGroupStore(configDir string, storePath string) ([]firefoxProfile
 		if !filepath.IsAbs(dir) {
 			dir = filepath.Join(configDir, dir)
 		}
-		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		info, err := os.Stat(dir)
+		switch {
+		case err == nil && !info.IsDir(), errors.Is(err, fs.ErrNotExist):
 			slog.Warn("Firefox profile directory listed in profile group store does not exist, skipping", "name", row.Name, "path", dir)
 			continue
+		case err != nil:
+			// The directory could not be checked, which is not the same as
+			// it being gone. Keep the profile: dropping it here would hide a
+			// profile the user can see in about:profiles.
+			slog.Warn("Could not check the Firefox profile directory listed in profile group store, keeping it", "name", row.Name, "path", dir, "error", err)
 		}
 		profiles = append(profiles, firefoxProfile{Name: row.Name, Dir: dir})
 	}
