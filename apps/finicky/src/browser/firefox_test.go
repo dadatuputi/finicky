@@ -188,19 +188,36 @@ func TestResolveFirefoxProfileArgs_AccessDenied(t *testing.T) {
 	profileDir := mkProfileDir(t, configDir, "Profiles/x1y2z3w4.default-release")
 	denyDir(t, configDir)
 
-	// A name cannot be resolved without reading the directory, so the caller
-	// launches Firefox without a profile flag. The log line, not the return
-	// value, is what tells the user why.
-	if got, ok := resolveFirefoxProfileArgs(configDir, "default-release"); ok {
-		t.Errorf("expected no match for a name when the directory is unreadable, got %v", got)
+	// The name cannot be resolved here, but Firefox can resolve it itself:
+	// "-P" is looked up against the profiles.ini Firefox reads directly, and
+	// Firefox is not the process being denied.
+	got, ok := resolveFirefoxProfileArgs(configDir, "default-release")
+	if !ok || !reflect.DeepEqual(got, []string{"-P", "default-release"}) {
+		t.Errorf("name under a denial: got (%v, %v), want -P default-release", got, ok)
 	}
 
-	// An absolute path still works, because using it needs no access to the
-	// directory. This is the only configuration that survives a denial, and
-	// the reason it is worth supporting.
-	got, ok := resolveFirefoxProfileArgs(configDir, profileDir)
+	// An empty profile is not a name to hand over.
+	if got, ok := resolveFirefoxProfileArgs(configDir, ""); ok {
+		t.Errorf("expected no args for an empty profile, got %v", got)
+	}
+
+	// An absolute path takes precedence over handing the name over, since it
+	// selects the directory exactly and works for a profile-group profile,
+	// which "-P" cannot reach.
+	got, ok = resolveFirefoxProfileArgs(configDir, profileDir)
 	if !ok || !reflect.DeepEqual(got, []string{"--profile", profileDir}) {
 		t.Errorf("absolute path under a denial: got (%v, %v), want --profile %s", got, ok, profileDir)
+	}
+}
+
+// When the list was readable, an unknown name is genuinely wrong: it stays
+// unresolved rather than being handed to Firefox to open the profile manager.
+func TestResolveFirefoxProfileArgs_UnknownNameNotHandedOver(t *testing.T) {
+	configDir := t.TempDir()
+	writeFile(t, filepath.Join(configDir, firefoxProfilesIni), "[Profile0]\nName=default-release\nPath=Profiles/abc.default-release\n")
+
+	if got, ok := resolveFirefoxProfileArgs(configDir, "Nonexistent"); ok {
+		t.Errorf("expected an unknown name to stay unresolved when the list was readable, got %v", got)
 	}
 }
 

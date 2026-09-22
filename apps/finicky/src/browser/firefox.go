@@ -128,8 +128,9 @@ func firefoxProfileNames(profiles []firefoxProfile) []string {
 // arguments. An exact profiles.ini name wins, so existing configurations keep
 // launching what they always did; then an exact group profile name; then the
 // profile directory, as a full path or its base name. An absolute path that
-// matched nothing is used as given, which is what makes a configuration work
-// when the profile list cannot be read at all.
+// matched nothing is used as given, and if the profile list could not be read
+// at all, a name is handed to Firefox unresolved: between them those two keep
+// a configuration working without any access to the Firefox directory.
 func resolveFirefoxProfileArgs(configDir string, profile string) ([]string, bool) {
 	profiles, sources := readFirefoxProfiles(configDir)
 
@@ -178,6 +179,25 @@ func resolveFirefoxProfileArgs(configDir string, profile string) ([]string, bool
 		if args, ok := firefoxProfilePathArgs(profile); ok {
 			return args, true
 		}
+	}
+
+	// Firefox resolves a profiles.ini name itself: "-P" hands the name to
+	// GetProfileByName, which searches the list Firefox parsed from its own
+	// profiles.ini. Reading that file here only ever confirmed what Firefox
+	// was about to look up anyway, so when we were not allowed to read it,
+	// hand the name over unresolved rather than dropping the profile. Firefox
+	// is not the process being denied, so the lookup succeeds for a
+	// profiles.ini profile. A name Firefox cannot find opens the profile
+	// manager, which is a visible failure the user can act on, where the
+	// alternative is the silent one that brought us here: no profile flag at
+	// all, and the URL in whichever window was last used.
+	//
+	// Only under a denial. When the list was readable and the name still did
+	// not match, the name is genuinely wrong and passing it on would trade a
+	// clear log line for a dialog.
+	if sources.AccessDenied && profile != "" {
+		slog.Warn("Passing the Firefox profile name to Firefox unresolved, because the profile list could not be read", "name", profile, "note", "a profile created with the newer profile manager cannot be selected this way and will open the profile manager instead; use its directory path for those", "suggestion", firefoxAccessHint)
+		return []string{"-P", profile}, true
 	}
 
 	attrs := []any{"Expected profile", profile, "Available profiles", strings.Join(firefoxProfileNames(profiles), ", ")}
