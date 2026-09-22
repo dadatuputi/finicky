@@ -87,7 +87,7 @@ A handler can open a URL in a specific browser profile, either as `browser: { na
 
 Use the object form for profile names that contain a colon, since the shorthand splits on `:`. The Finicky window lists the profiles it detected for each browser.
 
-Resolving a profile *name* means reading the browser's own data directory under `~/Library/Application Support`. Recent macOS versions protect those directories from other apps, so Finicky can be refused access to them. When that happens the profile list comes back empty, no name matches, and the browser is launched with no profile at all, which lands the URL in whichever profile was last used. The log says so, and names the remedy.
+Resolving a profile *name* means reading the browser's own data directory under `~/Library/Application Support`. macOS 27 ("Golden Gate") protects those directories from other apps, so Finicky can be refused access to them. When that happens the profile list comes back empty, no name matches, and the browser is launched with no profile at all, which lands the URL in whichever profile was last used. The log says so, and names the remedy.
 
 There are two ways out, and macOS will not prompt you for either one:
 

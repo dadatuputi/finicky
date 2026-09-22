@@ -44,11 +44,12 @@ const (
 	sqliteReadTimeout       = 1 * time.Second
 
 	// firefoxAccessHint is the remedy for an operating system denial.
-	// Recent macOS versions extended application data protection to the app
-	// support directories of non-sandboxed browsers, so reads of the Firefox
+	// macOS 27 extended application data protection to the app support
+	// directories of non-sandboxed browsers, so reads of the Firefox
 	// directory fail with EPERM ("operation not permitted") until the user
 	// grants Finicky Full Disk Access. Firefox itself keeps working, which
-	// makes the denial easy to mistake for a missing profile.
+	// makes the denial easy to mistake for a missing profile. The same
+	// protection covers the Chromium code path's "Local State".
 	firefoxAccessHint = "Grant Finicky Full Disk Access in System Settings > Privacy & Security > Full Disk Access, then restart Finicky"
 )
 
