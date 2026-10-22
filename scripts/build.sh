@@ -128,7 +128,10 @@ else
     # Rename arch build to plain Finicky.app
     build_arch arm64
 
-    rm -r apps/finicky/build/${APP_NAME}
+    # -f: there is nothing to remove on a first build, and apps/finicky/build
+    # is not tracked, so a fresh checkout has none of it. Without -f the
+    # missing directory aborts the script under "set -e".
+    rm -rf apps/finicky/build/${APP_NAME}
     mv apps/finicky/build/Finicky-arm64.app apps/finicky/build/${APP_NAME}
     copy_assets ${APP_NAME}
     # Sign before installing, so the copy in /Applications is the signed one.
