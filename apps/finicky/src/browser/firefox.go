@@ -47,10 +47,17 @@ const (
 	// macOS 27 extended application data protection to the app support
 	// directories of non-sandboxed browsers, so reads of the Firefox
 	// directory fail with EPERM ("operation not permitted") until the user
-	// grants Finicky Full Disk Access. Firefox itself keeps working, which
-	// makes the denial easy to mistake for a missing profile. The same
-	// protection covers the Chromium code path's "Local State".
-	firefoxAccessHint = "Grant Finicky Full Disk Access in System Settings > Privacy & Security > Full Disk Access, then restart Finicky"
+	// allows it. Firefox itself keeps working, which makes the denial easy
+	// to mistake for a missing profile. The same protection covers the
+	// Chromium code path's "Local State".
+	//
+	// The grant is per browser, under Finicky, in Files & Folders. macOS
+	// creates the entry, switched off, the first time it denies a read, and
+	// says so in a "Data Access Blocked" notification -- which is throttled
+	// and easy to miss, and is the only thing that ever mentions it. Full
+	// Disk Access also works but grants far more than this needs, so it is
+	// not what we suggest.
+	firefoxAccessHint = "Allow Finicky to read this browser's data in System Settings > Privacy & Security > Files & Folders, then restart Finicky"
 )
 
 // firefoxProfileSources records why a profile list may be incomplete, so that

@@ -139,7 +139,7 @@ func TestReadFirefoxIniProfiles_Missing(t *testing.T) {
 		t.Errorf("expected a not-exist error, got %v", err)
 	}
 	// A missing file must not be reported as a denial: that would send the
-	// user off to grant Full Disk Access for a profile that simply is not
+	// user off to change a privacy setting for a profile that simply is not
 	// there.
 	if errors.Is(err, fs.ErrPermission) {
 		t.Error("a missing profiles.ini must not look like a permission denial")
@@ -161,9 +161,9 @@ func denyDir(t *testing.T, dir string) {
 }
 
 // A denied read of the Firefox directory must be reported as a denial, not as
-// an empty profile list. Recent macOS versions protect the app support
-// directories of non-sandboxed browsers, so this is what Finicky sees until
-// the user grants it Full Disk Access.
+// an empty profile list. macOS 27 protects the app support directories of
+// non-sandboxed browsers, so this is what Finicky sees until the user allows
+// it under Files & Folders.
 func TestReadFirefoxProfiles_AccessDenied(t *testing.T) {
 	configDir := t.TempDir()
 	writeFile(t, filepath.Join(configDir, firefoxProfilesIni), sampleProfilesIni)
@@ -177,7 +177,7 @@ func TestReadFirefoxProfiles_AccessDenied(t *testing.T) {
 		t.Error("expected AccessDenied when the Firefox directory cannot be read")
 	}
 	note, ok := sources.note()
-	if !ok || !strings.Contains(note, "Full Disk Access") {
+	if !ok || !strings.Contains(note, "Files & Folders") {
 		t.Errorf("expected a note naming the remedy, got %q (ok=%v)", note, ok)
 	}
 }
@@ -268,7 +268,7 @@ func TestFirefoxProfileSourcesNote(t *testing.T) {
 	}
 	// A denial hides everything, so it wins over the store-only note.
 	note, ok = (firefoxProfileSources{AccessDenied: true, StoresUnreadable: true}).note()
-	if !ok || !strings.Contains(note, "Full Disk Access") {
+	if !ok || !strings.Contains(note, "Files & Folders") {
 		t.Errorf("denied note: got %q (ok=%v)", note, ok)
 	}
 }
