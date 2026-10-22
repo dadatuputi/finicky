@@ -48,53 +48,10 @@ func LaunchBrowser(config BrowserConfig, dryRun bool, openInBackgroundByDefault 
 
 	slog.Info("Starting browser", "name", config.Name, "url", config.URL)
 
-	var openArgs []string
-
-	if config.AppType == "bundleId" {
-		openArgs = []string{"-b", config.Name}
-	} else {
-		openArgs = []string{"-a", config.Name}
-	}
-
-	var openInBackground bool = openInBackgroundByDefault
-
-	if config.OpenInBackground != nil {
-		openInBackground = *config.OpenInBackground
-	}
-
-	if openInBackground {
-		openArgs = append(openArgs, "-g")
-	}
-
 	// Handle profile and custom args
 	profileArgs, ok := resolveBrowserProfileArgs(config.Name, config.Profile)
-	hasCustomArgs := len(config.Args) > 0
 
-	// Add -n flag if profile is used (required for profile switching)
-	if ok {
-		openArgs = append(openArgs, "-n")
-	}
-
-	// Add --args if we have profile args or custom args
-	if ok || hasCustomArgs {
-		if ! slices.Contains(config.Args, "--args") {
-			openArgs = append(openArgs, "--args")
-		}
-		// Add profile arguments first if present
-		if ok {
-			openArgs = append(openArgs, profileArgs...)
-		}
-
-		// Add custom args or URL
-		if hasCustomArgs {
-			openArgs = append(openArgs, config.Args...)
-		} else {
-			openArgs = append(openArgs, config.URL)
-		}
-	} else {
-		// No special args, just add the URL
-		openArgs = append(openArgs, config.URL)
-	}
+	openArgs := buildOpenArgs(config, profileArgs, ok, openInBackgroundByDefault)
 
 	cmd := exec.Command("open", openArgs...)
 
@@ -145,6 +102,66 @@ func LaunchBrowser(config BrowserConfig, dryRun bool, openInBackgroundByDefault 
 	}
 
 	return nil
+}
+
+// buildOpenArgs assembles the argument list for the "open" command.
+//
+// "open" only passes everything after --args to an instance it actually
+// launches: with the application already running it activates the existing
+// one and drops them. So anything that has arguments to deliver needs -n,
+// not only a profile. Without it a handler that passes args works on a cold
+// start and is silently ignored afterwards, leaving the URL in whichever
+// window was last used.
+//
+// Browsers are the case this matters for, and Chrome and Firefox both hand
+// the URL to the already running process and exit, so -n does not leave a
+// second copy behind.
+func buildOpenArgs(config BrowserConfig, profileArgs []string, hasProfile bool, openInBackgroundByDefault bool) []string {
+	var openArgs []string
+
+	if config.AppType == "bundleId" {
+		openArgs = []string{"-b", config.Name}
+	} else {
+		openArgs = []string{"-a", config.Name}
+	}
+
+	openInBackground := openInBackgroundByDefault
+	if config.OpenInBackground != nil {
+		openInBackground = *config.OpenInBackground
+	}
+
+	if openInBackground {
+		openArgs = append(openArgs, "-g")
+	}
+
+	hasCustomArgs := len(config.Args) > 0
+
+	// A new instance is what makes the arguments arrive at all.
+	if hasProfile || hasCustomArgs {
+		openArgs = append(openArgs, "-n")
+	}
+
+	if hasProfile || hasCustomArgs {
+		if !slices.Contains(config.Args, "--args") {
+			openArgs = append(openArgs, "--args")
+		}
+		// Add profile arguments first if present
+		if hasProfile {
+			openArgs = append(openArgs, profileArgs...)
+		}
+
+		// Add custom args or URL
+		if hasCustomArgs {
+			openArgs = append(openArgs, config.Args...)
+		} else {
+			openArgs = append(openArgs, config.URL)
+		}
+	} else {
+		// No special args, just add the URL
+		openArgs = append(openArgs, config.URL)
+	}
+
+	return openArgs
 }
 
 func resolveBrowserProfileArgs(identifier string, profile string) ([]string, bool) {
